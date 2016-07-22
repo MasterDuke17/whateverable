@@ -36,6 +36,22 @@ use constant ITERATIONS => 5;
 
 my $name = 'benchable';
 
+sub benchmark_code{
+  my ($self, $full_commit, $short_commit, $times, $filename) = @_;
+
+  for (1..ITERATIONS) {
+     my (undef, $exit, $time) = $self->get_output($self->BUILDS . "/$full_commit/bin/perl6", $filename);
+     push @{$times->{$short_commit}}, $exit == 0 ? sprintf('%.4f', $time) : "run failed, exit code = $exit";
+  }
+
+  my @times = @{$times->{$short_commit}};
+  $times->{$short_commit} = {};
+  $times->{$short_commit}{'min'} = min(@times);
+  $times->{$short_commit}{'max'} = max(@times);
+  $times->{$short_commit}{'mean'} = mean(@times);
+  $times->{$short_commit}{'stddev'} = stddev(@times);
+}
+
 sub process_message {
   my ($self, $message, $body) = @_;
 
@@ -64,6 +80,8 @@ sub process_message {
       @commits = split("\n", $result);
       my $num_commits = scalar @commits;
       return "Too many commits ($num_commits) in range, you're only allowed " . LIMIT if ($num_commits > LIMIT);
+    } elsif (lc $config eq 'releases') {
+      @commits = qw(2015.10 2015.11 2015.12 2016.01 2016.02 2016.03 2016.04 2016.05 2016.06 2016.07 HEAD);
     } else {
       @commits = $config;
     }
@@ -87,22 +105,34 @@ sub process_message {
       } elsif (not -e $self->BUILDS . "/$full_commit/bin/perl6") {
         $times{$short_commit} = 'No build for this commit';
       } else { # actually run the code
-        for (1..ITERATIONS) {
-          (undef, my $exit, my $time) = $self->get_output($self->BUILDS . "/$full_commit/bin/perl6", $filename);
-          push @{$times{$short_commit}}, $exit == 0 ? sprintf('%.4f', $time) : "run failed, exit code = $exit";
-        }
-        my @times = @{$times{$short_commit}};
-        $times{$short_commit} = {};
-        $times{$short_commit}{'min'} = min(@times);
-        $times{$short_commit}{'max'} = max(@times);
-        $times{$short_commit}{'mean'} = mean(@times);
-        $times{$short_commit}{'stddev'} = stddev(@times);
+        $self->benchmark_code($full_commit, $short_commit, \%times, $filename);
       }
+    }
+
+    if (lc $config eq 'releases' or $config =~ /,/) {
+      my $old_dir = cwd();
+      chdir $self->RAKUDO;
+
+Z:    for (my $x = 0; $x < scalar @commits - 1; $x++) {
+        next unless (ref($times{$commits[$x]}) eq 'HASH' and ref($times{$commits[$x + 1]}) eq 'HASH');
+        if (abs($times{$commits[$x]}{'min'} - $times{$commits[$x + 1]}{'min'}) >= $times{$commits[$x]}{'min'}*0.1) {
+          my ($new_commit, $exit_status, $time) = $self->get_output('git', 'rev-list', '--bisect', $commits[$x] . '^..' . $commits[$x + 1]);
+          if ($exit_status == 0 and defined $new_commit and $new_commit ne '' and !exists $times{$new_commit} and $new_commit ne $commits[$x] and $new_commit ne $commits[$x + 1]) {
+             my $full_commit = $self->to_full_commit($new_commit);
+             $self->benchmark_code($full_commit, $new_commit, \%times, $filename);
+             splice(@commits, $x + 1, 0, $new_commit);
+             redo Z;
+          }
+        }
+      }
+
+      chdir $old_dir;
     }
 
     if (scalar @commits >= ITERATIONS) {
       my ($gfh, $gfilename) = tempfile(SUFFIX => '.svg', UNLINK => 1);
       (my $title = $body) =~ s/"/\\"/g;
+      my @ydata = map { $times{substr($_, 0, 7)}{'min'} } @commits;
       my $chart = Chart::Gnuplot->new(
         output   => 'graph.svg',
         encoding => 'utf8',
@@ -115,11 +145,12 @@ sub process_message {
           text   => 'Commits\\nMean,Max,Stddev',
           offset => '0,-1',
         },
-        ylabel   => 'Seconds',
         xtics    => { labels => [map { "\"$commits[$_]\\n" . join(',', @{$times{substr($commits[$_], 0, 7)}}{qw(mean max stddev)}) . "\" $_" } 0..$#commits], },
+        ylabel   => 'Seconds',
+        yrange   => [0, max(@ydata)*1.25],
           );
       my $dataSet = Chart::Gnuplot::DataSet->new(
-        ydata => [map { $times{substr($_, 0, 7)}{'min'} } @commits],
+        ydata => \@ydata,
         style => 'linespoints',
           );
       $chart->plot2d($dataSet);
@@ -130,7 +161,7 @@ sub process_message {
       };
     }
 
-    $msg_response .= '|' . join("\n|", map { $_ = substr($_, 0, 7); "«$_»:$times{$_}" } @commits);
+    $msg_response .= '|' . join("\n|", map { $_ = substr($_, 0, 7); "«$_»:$times{$_}{'min'}" } @commits);
   } else {
     return help();
   }
