@@ -153,7 +153,7 @@ Z:    for (my $x = 0; $x < scalar @commits - 1; $x++) {
           text   => 'Commits\\nMean,Max,Stddev',
           offset => '0,-1',
         },
-        xtics    => { labels => [map { "\"$commits[$_]\\n" . ($times{substr($_, 0, 7)}{'err'} // join(',', @{$times{substr($commits[$_], 0, 7)}}{qw(mean max stddev)})) . "\" $_" } 0..$#commits], },
+        xtics    => { labels => [map { "\"$commits[$_]\\n" . ($times{substr($commits[$_], 0, 7)}{'err'} // join(',', @{$times{substr($commits[$_], 0, 7)}}{qw(mean max stddev)})) . "\" $_" } 0..$#commits], },
         ylabel   => 'Seconds',
         yrange   => [0, max(@ydata)*1.25],
           );
