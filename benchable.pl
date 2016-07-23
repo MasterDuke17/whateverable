@@ -36,20 +36,27 @@ use constant ITERATIONS => 5;
 
 my $name = 'benchable';
 
-sub benchmark_code{
-  my ($self, $full_commit, $short_commit, $times, $filename) = @_;
+sub benchmark_code {
+  my ($self, $full_commit, $filename) = @_;
 
+  my @times;
+  my %stats;
   for (1..ITERATIONS) {
-     my (undef, $exit, $time) = $self->get_output($self->BUILDS . "/$full_commit/bin/perl6", $filename);
-     push @{$times->{$short_commit}}, $exit == 0 ? sprintf('%.4f', $time) : "run failed, exit code = $exit";
+    my (undef, $exit, $time) = $self->get_output($self->BUILDS . "/$full_commit/bin/perl6", $filename);
+    if ($exit == 0) {
+      push @times, sprintf('%.4f', $time);
+    } else {
+      $stats{'err'} = "run failed, exit code = $exit";
+      return \%stats;
+    }
   }
 
-  my @times = @{$times->{$short_commit}};
-  $times->{$short_commit} = {};
-  $times->{$short_commit}{'min'} = min(@times);
-  $times->{$short_commit}{'max'} = max(@times);
-  $times->{$short_commit}{'mean'} = mean(@times);
-  $times->{$short_commit}{'stddev'} = stddev(@times);
+  $stats{'min'} = min(@times);
+  $stats{'max'} = max(@times);
+  $stats{'mean'} = mean(@times);
+  $stats{'stddev'} = stddev(@times);
+
+  return \%stats;
 }
 
 sub process_message {
@@ -101,11 +108,11 @@ sub process_message {
       my $full_commit = $self->to_full_commit($commit);
       my $short_commit = substr($commit, 0, 7);
       if (not defined $full_commit) {
-        $times{$short_commit} = 'Cannot find this revision';
+        $times{$short_commit}{'err'} = 'Cannot find this revision';
       } elsif (not -e $self->BUILDS . "/$full_commit/bin/perl6") {
-        $times{$short_commit} = 'No build for this commit';
+        $times{$short_commit}{'err'} = 'No build for this commit';
       } else { # actually run the code
-        $self->benchmark_code($full_commit, $short_commit, \%times, $filename);
+        $times{$short_commit} = $self->benchmark_code($full_commit, $filename);
       }
     }
 
@@ -114,12 +121,13 @@ sub process_message {
       chdir $self->RAKUDO;
 
 Z:    for (my $x = 0; $x < scalar @commits - 1; $x++) {
-        next unless (ref($times{$commits[$x]}) eq 'HASH' and ref($times{$commits[$x + 1]}) eq 'HASH');
+        next unless (exists $times{$commits[$x]} and exists $times{$commits[$x + 1]});
+        next if (exists $times{$commits[$x]}{'err'} or exists $times{$commits[$x + 1]}{'err'});
         if (abs($times{$commits[$x]}{'min'} - $times{$commits[$x + 1]}{'min'}) >= $times{$commits[$x]}{'min'}*0.1) {
           my ($new_commit, $exit_status, $time) = $self->get_output('git', 'rev-list', '--bisect', $commits[$x] . '^..' . $commits[$x + 1]);
           if ($exit_status == 0 and defined $new_commit and $new_commit ne '' and !exists $times{$new_commit} and $new_commit ne $commits[$x] and $new_commit ne $commits[$x + 1]) {
              my $full_commit = $self->to_full_commit($new_commit);
-             $self->benchmark_code($full_commit, $new_commit, \%times, $filename);
+             $times{$new_commit} = $self->benchmark_code($full_commit, $filename);
              splice(@commits, $x + 1, 0, $new_commit);
              redo Z;
           }
@@ -132,7 +140,7 @@ Z:    for (my $x = 0; $x < scalar @commits - 1; $x++) {
     if (scalar @commits >= ITERATIONS) {
       my ($gfh, $gfilename) = tempfile(SUFFIX => '.svg', UNLINK => 1);
       (my $title = $body) =~ s/"/\\"/g;
-      my @ydata = map { $times{substr($_, 0, 7)}{'min'} } @commits;
+      my @ydata = map { $times{substr($_, 0, 7)}{'err'} // $times{substr($_, 0, 7)}{'min'} } @commits;
       my $chart = Chart::Gnuplot->new(
         output   => 'graph.svg',
         encoding => 'utf8',
@@ -145,7 +153,7 @@ Z:    for (my $x = 0; $x < scalar @commits - 1; $x++) {
           text   => 'Commits\\nMean,Max,Stddev',
           offset => '0,-1',
         },
-        xtics    => { labels => [map { "\"$commits[$_]\\n" . join(',', @{$times{substr($commits[$_], 0, 7)}}{qw(mean max stddev)}) . "\" $_" } 0..$#commits], },
+        xtics    => { labels => [map { "\"$commits[$_]\\n" . ($times{substr($_, 0, 7)}{'err'} // join(',', @{$times{substr($commits[$_], 0, 7)}}{qw(mean max stddev)})) . "\" $_" } 0..$#commits], },
         ylabel   => 'Seconds',
         yrange   => [0, max(@ydata)*1.25],
           );
@@ -161,7 +169,7 @@ Z:    for (my $x = 0; $x < scalar @commits - 1; $x++) {
       };
     }
 
-    $msg_response .= '|' . join("\n|", map { $_ = substr($_, 0, 7); "«$_»:$times{$_}{'min'}" } @commits);
+    $msg_response .= '|' . join("\n|", map { $_ = substr($_, 0, 7); "«$_»:" . ($times{$_}{'err'} // $times{$_}{'min'}) } @commits);
   } else {
     return help();
   }
