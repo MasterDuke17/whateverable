@@ -138,22 +138,23 @@ Z:    for (my $x = 0; $x < scalar @commits - 1; $x++) {
     }
 
     if (scalar @commits >= ITERATIONS) {
-      my ($gfh, $gfilename) = tempfile(SUFFIX => '.svg', UNLINK => 1);
+      my $gfilename = 'graph.svg';
       (my $title = $body) =~ s/"/\\"/g;
       my @ydata = map { $times{substr($_, 0, 7)}{'err'} // $times{substr($_, 0, 7)}{'min'} } @commits;
       my $chart = Chart::Gnuplot->new(
-        output   => 'graph.svg',
+        output   => $gfilename,
         encoding => 'utf8',
         title	 => {
           text     => encode_utf8($title),
           enhanced => 'off',
         },
+        size     => '2,1',
 #        terminal => 'svg mousing',
         xlabel   => {
           text   => 'Commits\\nMean,Max,Stddev',
           offset => '0,-1',
         },
-        xtics    => { labels => [map { "\"$commits[$_]\\n" . ($times{substr($commits[$_], 0, 7)}{'err'} // join(',', @{$times{substr($commits[$_], 0, 7)}}{qw(mean max stddev)})) . "\" $_" } 0..$#commits], },
+        xtics    => { labels => [map { my $commit = substr($commits[$_], 0, 7); "\"$commit\\n" . ($times{$commit}{'err'} // join(',', @{$times{$commit}}{qw(mean max stddev)})) . "\" $_" } 0..$#commits], },
         ylabel   => 'Seconds',
         yrange   => [0, max(@ydata)*1.25],
           );
@@ -163,7 +164,8 @@ Z:    for (my $x = 0; $x < scalar @commits - 1; $x++) {
           );
       $chart->plot2d($dataSet);
 
-      $graph->{'graph.svg'} = do {
+      open(my $gfh, '<', $gfilename) or die $!;
+      $graph->{$gfilename} = do {
         local $/;
         <$gfh>;
       };
