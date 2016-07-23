@@ -30,6 +30,7 @@ use File::Temp qw(tempfile tempdir);
 use List::Util qw(min max);
 use Chart::Gnuplot;
 use Statistics::Basic qw(mean stddev);
+use Scalar::Util qw(looks_like_number);
 
 use constant LIMIT => 300;
 use constant ITERATIONS => 5;
@@ -156,7 +157,7 @@ Z:    for (my $x = 0; $x < scalar @commits - 1; $x++) {
         },
         xtics    => { labels => [map { my $commit = substr($commits[$_], 0, 7); "\"$commit\\n" . ($times{$commit}{'err'} // join(',', @{$times{$commit}}{qw(mean max stddev)})) . "\" $_" } 0..$#commits], },
         ylabel   => 'Seconds',
-        yrange   => [0, max(@ydata)*1.25],
+        yrange   => [0, max(grep { looks_like_number($_) } @ydata)*1.25],
           );
       my $dataSet = Chart::Gnuplot::DataSet->new(
         ydata => \@ydata,
